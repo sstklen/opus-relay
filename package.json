@@ -1,0 +1,32 @@
+{
+  "name": "opus-relay",
+  "version": "1.0.0",
+  "description": "把本機 Claude CLI (Opus) 橋接到遠端 VPS — 免 API Key，用你的 Claude 訂閱",
+  "type": "module",
+  "main": "server.ts",
+  "bin": {
+    "opus-relay": "./client.ts"
+  },
+  "scripts": {
+    "client": "npx tsx client.ts",
+    "client:bun": "bun client.ts",
+    "status": "npx tsx client.ts status"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "@types/ws": "^8.5.12",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "keywords": ["claude", "opus", "relay", "websocket", "llm", "ai"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sstklen/opus-relay.git"
+  }
+}
