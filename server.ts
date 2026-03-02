@@ -258,9 +258,8 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
 
   function authenticate(req: IncomingMessage): boolean {
     const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-    const pw = url.searchParams.get('password')
-      || req.headers['x-admin-password'] as string
-      || '';
+    // 只接受 header 認證（不接受 query string，避免密碼出現在 log）
+    const pw = req.headers['x-admin-password'] as string || '';
     return constantTimeCompare(pw, password);
   }
 
@@ -398,9 +397,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
     const parsedUrl = url || new globalThis.URL(req.url);
     if (parsedUrl.pathname !== path) return undefined;
 
-    const pw = parsedUrl.searchParams.get('password')
-      || req.headers.get('x-admin-password')
-      || '';
+    const pw = req.headers.get('x-admin-password') || '';
     if (!constantTimeCompare(pw, password)) {
       return new Response('Unauthorized', { status: 401 });
     }

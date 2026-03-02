@@ -348,7 +348,7 @@ location /api/opus-relay {
 
 ## Security
 
-- Password is sent via query param (`?password=xxx`) or header (`x-admin-password`)
+- Password is sent via header (`x-admin-password`) — never in URL query strings
 - **Always use WSS** (TLS) in production — never plain WS
 - Client has lock file to prevent multiple instances
 - Server silently replaces old connections (prevents infinite reconnect loops)

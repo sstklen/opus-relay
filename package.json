@@ -1,5 +1,6 @@
 {
   "name": "opus-relay",
+  "private": true,
   "version": "1.0.0",
   "description": "把本機 Claude CLI (Opus) 橋接到遠端 VPS — 免 API Key，用你的 Claude 訂閱",
   "type": "module",
