@@ -28,6 +28,8 @@ const MIN_RECONNECT = 3_000;          // 最短 3 秒重連
 const MAX_RECONNECT = 60_000;         // 最長 60 秒重連
 const STATUS_INTERVAL = 300_000;      // 5 分鐘印一次狀態
 const DEFAULT_TASK_TIMEOUT = 120_000; // 預設任務超時 120 秒
+const MAX_PROMPT_LENGTH = 100_000;   // 100KB prompt 上限
+const MAX_OUTPUT_LENGTH = 1_000_000; // 1MB stdout 上限
 const LOCK_FILE = process.platform === 'win32'
   ? `${process.env.TEMP || 'C:\\Temp'}\\opus-relay-client.lock`
   : '/tmp/opus-relay-client.lock';
@@ -120,11 +122,13 @@ function connect(): void {
   if (isShuttingDown) return;
   if (ws) { try { ws.close(); } catch {} ws = null; }
 
-  const url = `${RELAY_URL}?password=${encodeURIComponent(RELAY_PASSWORD)}`;
   log(`連接中...${stats.consecutiveFailures > 0 ? `（第 ${stats.consecutiveFailures + 1} 次）` : ''}`);
 
   try {
-    ws = new WebSocket(url);
+    // 密碼透過 header 傳送（不放 URL query string，避免出現在 proxy log 裡）
+    ws = new WebSocket(RELAY_URL, {
+      headers: { 'x-admin-password': RELAY_PASSWORD },
+    });
   } catch (err: any) {
     log(`WebSocket 建立失敗: ${err.message}`);
     scheduleReconnect();
@@ -152,6 +156,11 @@ function connect(): void {
 
       // ── 收到通用任務 ──
       if (msg.type === 'task_request' && msg.id && msg.prompt) {
+        // 防止超大 prompt 灌爆記憶體
+        if (msg.prompt.length > MAX_PROMPT_LENGTH) {
+          safeSend({ type: 'task_response', id: msg.id, error: `Prompt too large (${msg.prompt.length} chars, max ${MAX_PROMPT_LENGTH})` });
+          return;
+        }
         log(`📥 任務 [${msg.id.slice(-8)}]: ${msg.prompt.slice(0, 60)}...`);
         const timeout = msg.timeout || DEFAULT_TASK_TIMEOUT;
 
@@ -235,8 +244,12 @@ async function runLocalClaude(prompt: string, timeout: number): Promise<string> 
     let stdout = '';
     let stderr = '';
 
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    proc.stdout.on('data', (chunk: Buffer) => {
+      if (stdout.length < MAX_OUTPUT_LENGTH) stdout += chunk.toString();
+    });
+    proc.stderr.on('data', (chunk: Buffer) => {
+      if (stderr.length < MAX_OUTPUT_LENGTH) stderr += chunk.toString();
+    });
 
     proc.on('close', (code: number | null) => {
       if (code !== 0) {
@@ -350,18 +363,24 @@ function scheduleReconnect(): void {
 // Lock file（防多開）
 // ================================================
 
+const LOCK_MARKER = 'opus-relay';
+
 function acquireLock(): boolean {
   try {
     if (existsSync(LOCK_FILE)) {
-      const oldPid = readFileSync(LOCK_FILE, 'utf-8').trim();
-      try {
-        process.kill(Number(oldPid), 0);
-        console.error(`❌ 已有 relay 在跑 (PID ${oldPid})`);
-        console.error(`   刪掉 lock 重試: rm ${LOCK_FILE}`);
-        return false;
-      } catch { /* PID 已死，可以接手 */ }
+      const content = readFileSync(LOCK_FILE, 'utf-8').trim();
+      const [oldPid, marker] = content.split(':');
+      // 只認自己寫的 lock（防 PID 重用時誤判）
+      if (marker === LOCK_MARKER) {
+        try {
+          process.kill(Number(oldPid), 0);
+          console.error(`❌ 已有 relay 在跑 (PID ${oldPid})`);
+          console.error(`   刪掉 lock 重試: rm ${LOCK_FILE}`);
+          return false;
+        } catch { /* PID 已死，可以接手 */ }
+      }
     }
-    writeFileSync(LOCK_FILE, String(process.pid));
+    writeFileSync(LOCK_FILE, `${process.pid}:${LOCK_MARKER}`);
     return true;
   } catch { return true; }
 }

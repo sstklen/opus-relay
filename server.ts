@@ -20,6 +20,18 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import { URL } from 'url';
+import { timingSafeEqual, randomUUID } from 'crypto';
+
+/** 常數時間字串比較（防 timing attack） */
+function constantTimeCompare(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const maxLen = Math.max(a.length, b.length);
+  const bufA = Buffer.alloc(maxLen, 0);
+  const bufB = Buffer.alloc(maxLen, 0);
+  bufA.write(a);
+  bufB.write(b);
+  return a.length === b.length && timingSafeEqual(bufA, bufB);
+}
 
 // ─── 型別 ───
 
@@ -151,7 +163,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
   // ─── 內部工具 ───
 
   function generateId(): string {
-    return `relay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return `relay_${randomUUID()}`;
   }
 
   function isOnline(): boolean {
@@ -249,7 +261,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
     const pw = url.searchParams.get('password')
       || req.headers['x-admin-password'] as string
       || '';
-    return password && pw === password;
+    return constantTimeCompare(pw, password);
   }
 
   // ─── 公開 API ───
@@ -389,7 +401,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
     const pw = parsedUrl.searchParams.get('password')
       || req.headers.get('x-admin-password')
       || '';
-    if (!password || pw !== password) {
+    if (!constantTimeCompare(pw, password)) {
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -404,7 +416,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
       if (ws.data?.type === wsType) {
         // 包一層，讓 Bun 的 ServerWebSocket 看起來像 ws 的 WebSocket
         const wrapped = {
-          readyState: WebSocket.OPEN,
+          get readyState() { return ws.readyState; },
           send: (data: string) => ws.send(data),
           ping: () => ws.ping(),
           close: () => ws.close(),
