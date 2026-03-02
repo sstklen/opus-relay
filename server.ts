@@ -259,7 +259,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
   function authenticate(req: IncomingMessage): boolean {
     const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
     // 只接受 header 認證（不接受 query string，避免密碼出現在 log）
-    const pw = req.headers['x-admin-password'] as string || '';
+    const pw = req.headers['x-relay-password'] as string || '';
     return constantTimeCompare(pw, password);
   }
 
@@ -290,8 +290,9 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
   function listen(port: number): void {
     const { createServer } = require('http');
     const server = createServer((_req: any, res: any) => {
+      // 安全：只回傳最小資訊，不洩漏連線時間、pending 數量等細節
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ opus_relay: getStats() }));
+      res.end(JSON.stringify({ opus_relay: { online: isOnline() } }));
     });
     server.on('upgrade', (req: IncomingMessage, socket: any, head: Buffer) => {
       handleUpgrade(req, socket, head);
@@ -397,7 +398,7 @@ export function createOpusRelay(options: OpusRelayOptions): OpusRelay {
     const parsedUrl = url || new globalThis.URL(req.url);
     if (parsedUrl.pathname !== path) return undefined;
 
-    const pw = req.headers.get('x-admin-password') || '';
+    const pw = req.headers.get('x-relay-password') || '';
     if (!constantTimeCompare(pw, password)) {
       return new Response('Unauthorized', { status: 401 });
     }

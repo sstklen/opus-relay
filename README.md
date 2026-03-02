@@ -63,7 +63,7 @@ import { createOpusRelay } from './opus-relay/server.js';
 
 const app = express();
 const relay = createOpusRelay({
-  password: process.env.RELAY_PASSWORD || 'your-secret-password',
+  password: process.env.RELAY_PASSWORD!,
 });
 
 // Your existing routes
@@ -98,7 +98,7 @@ app.post('/api/analyze', async (req, res) => {
 import { createOpusRelay } from './opus-relay/server.js';
 
 const relay = createOpusRelay({
-  password: process.env.RELAY_PASSWORD || 'your-secret-password',
+  password: process.env.RELAY_PASSWORD!,
 });
 
 // Starts its own HTTP + WebSocket server
@@ -124,7 +124,7 @@ RELAY_PASSWORD=your-secret-password npx tsx relay-server.ts
 import { createOpusRelay } from './opus-relay/server.js';
 
 const relay = createOpusRelay({
-  password: process.env.RELAY_PASSWORD || 'your-secret-password',
+  password: process.env.RELAY_PASSWORD!,
 });
 
 export default {
@@ -348,10 +348,27 @@ location /api/opus-relay {
 
 ## Security
 
-- Password is sent via header (`x-admin-password`) — never in URL query strings
-- **Always use WSS** (TLS) in production — never plain WS
-- Client has lock file to prevent multiple instances
-- Server silently replaces old connections (prevents infinite reconnect loops)
+### Trust Model
+
+> **Important:** The client machine trusts the VPS server completely.
+
+Whoever controls the VPS can send **any prompt** to Claude CLI on your machine. Claude CLI has access to your local filesystem and tools. This is by design — the relay is meant for **your own VPS** only.
+
+**Rules:**
+- Only connect to servers **you** control
+- Never share your `RELAY_PASSWORD` publicly
+- Use `wss://` (TLS) in production — never plain `ws://`
+- Consider running the client as a restricted user with minimal filesystem access
+- The client limits concurrent tasks (default: 3) to prevent resource exhaustion
+
+### Security Features
+
+- Password sent via header (`x-relay-password`) — never in URL query strings
+- Timing-safe password comparison (prevents timing attacks)
+- Prompt size limit (100KB) and output size limit (1MB)
+- Lock file prevents multiple client instances
+- Error messages are sanitized — local file paths are **never** sent back to the server
+- Concurrent task limit prevents resource exhaustion
 
 ## License
 

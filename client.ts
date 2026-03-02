@@ -30,9 +30,11 @@ const STATUS_INTERVAL = 300_000;      // 5 分鐘印一次狀態
 const DEFAULT_TASK_TIMEOUT = 120_000; // 預設任務超時 120 秒
 const MAX_PROMPT_LENGTH = 100_000;   // 100KB prompt 上限
 const MAX_OUTPUT_LENGTH = 1_000_000; // 1MB stdout 上限
+const MAX_CONCURRENT_TASKS = 3;      // 同時最多 3 個任務（防資源耗盡）
+// Lock file 放在使用者目錄下（不放 /tmp，防 symlink 攻擊）
 const LOCK_FILE = process.platform === 'win32'
   ? `${process.env.TEMP || 'C:\\Temp'}\\opus-relay-client.lock`
-  : '/tmp/opus-relay-client.lock';
+  : `${process.env.HOME || '/tmp'}/.opus-relay-client.lock`;
 
 // ─── 狀態 ───
 let ws: WebSocket | null = null;
@@ -42,6 +44,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let statusTimer: ReturnType<typeof setInterval> | null = null;
 let isShuttingDown = false;
 
+let activeTasks = 0; // 目前正在跑的任務數
+
 const stats = {
   connectedAt: 0,
   totalConnections: 0,
@@ -50,6 +54,7 @@ const stats = {
   heartbeatsAcked: 0,
   tasksHandled: 0,
   tasksFailed: 0,
+  tasksRejected: 0,
   consecutiveFailures: 0,
 };
 
@@ -85,10 +90,17 @@ function main(): void {
 
   if (!acquireLock()) process.exit(1);
 
+  // 安全警告：未加密連線
+  if (RELAY_URL.startsWith('ws://')) {
+    log('⚠️  WARNING: 使用未加密的 ws:// — 密碼和資料以明文傳輸！');
+    log('   正式環境請務必使用 wss://');
+  }
+
   log('🚀 Opus Relay Client 啟動');
   log(`   VPS: ${RELAY_URL.replace(/\?.*/, '')}`);
   log(`   PID: ${process.pid}`);
   log(`   Runtime: ${detectRuntime()}`);
+  log(`   同時任務上限: ${MAX_CONCURRENT_TASKS}`);
 
   statusTimer = setInterval(printStatus, STATUS_INTERVAL);
   connect();
@@ -127,7 +139,7 @@ function connect(): void {
   try {
     // 密碼透過 header 傳送（不放 URL query string，避免出現在 proxy log 裡）
     ws = new WebSocket(RELAY_URL, {
-      headers: { 'x-admin-password': RELAY_PASSWORD },
+      headers: { 'x-relay-password': RELAY_PASSWORD },
     });
   } catch (err: any) {
     log(`WebSocket 建立失敗: ${err.message}`);
@@ -156,6 +168,13 @@ function connect(): void {
 
       // ── 收到通用任務 ──
       if (msg.type === 'task_request' && msg.id && msg.prompt) {
+        // 同時任務上限（防資源耗盡）
+        if (activeTasks >= MAX_CONCURRENT_TASKS) {
+          safeSend({ type: 'task_response', id: msg.id, error: `Too many concurrent tasks (max ${MAX_CONCURRENT_TASKS})` });
+          stats.tasksRejected++;
+          log(`⛔ 拒絕 [${msg.id.slice(-8)}]: 同時任務已達上限 (${activeTasks}/${MAX_CONCURRENT_TASKS})`);
+          return;
+        }
         // 防止超大 prompt 灌爆記憶體
         if (msg.prompt.length > MAX_PROMPT_LENGTH) {
           safeSend({ type: 'task_response', id: msg.id, error: `Prompt too large (${msg.prompt.length} chars, max ${MAX_PROMPT_LENGTH})` });
@@ -164,6 +183,7 @@ function connect(): void {
         log(`📥 任務 [${msg.id.slice(-8)}]: ${msg.prompt.slice(0, 60)}...`);
         const timeout = msg.timeout || DEFAULT_TASK_TIMEOUT;
 
+        activeTasks++;
         try {
           const result = await runLocalClaude(msg.prompt, timeout);
           safeSend({ type: 'task_response', id: msg.id, result });
@@ -173,13 +193,22 @@ function connect(): void {
           safeSend({ type: 'task_response', id: msg.id, error: err.message });
           stats.tasksFailed++;
           log(`❌ 失敗 [${msg.id.slice(-8)}]: ${err.message}`);
+        } finally {
+          activeTasks--;
         }
         return;
       }
 
       // ── 相容舊協議（debug_request）──
       if (msg.type === 'debug_request' && msg.id) {
+        // 同時任務上限（debug 也計入）
+        if (activeTasks >= MAX_CONCURRENT_TASKS) {
+          safeSend({ type: 'debug_response', id: msg.id, error: `Too many concurrent tasks (max ${MAX_CONCURRENT_TASKS})` });
+          stats.tasksRejected++;
+          return;
+        }
         log(`📥 debug [${msg.id.slice(-8)}]`);
+        activeTasks++;
         try {
           const result = await handleDebugRequest(msg);
           safeSend({ type: 'debug_response', id: msg.id, analysis: result });
@@ -189,6 +218,8 @@ function connect(): void {
           safeSend({ type: 'debug_response', id: msg.id, error: err.message });
           stats.tasksFailed++;
           log(`❌ 失敗 [${msg.id.slice(-8)}]: ${err.message}`);
+        } finally {
+          activeTasks--;
         }
         return;
       }
@@ -253,7 +284,10 @@ async function runLocalClaude(prompt: string, timeout: number): Promise<string> 
 
     proc.on('close', (code: number | null) => {
       if (code !== 0) {
-        reject(new Error(`claude exit ${code}: ${stderr.slice(0, 200)}`));
+        // 安全：只回傳 exit code，不回傳 stderr（可能包含本機檔案路徑）
+        // stderr 只留在本機 log，不傳回 VPS
+        log(`⚠️ claude stderr: ${stderr.slice(0, 200)}`);
+        reject(new Error(`claude exited with code ${code}`));
         return;
       }
       if (!stdout.trim()) {
@@ -264,7 +298,9 @@ async function runLocalClaude(prompt: string, timeout: number): Promise<string> 
     });
 
     proc.on('error', (err: Error) => {
-      reject(new Error(`claude error: ${err.message}`));
+      // 安全：不回傳原始 error message（可能包含路徑資訊）
+      log(`⚠️ claude spawn error: ${err.message}`);
+      reject(new Error('claude process failed to start'));
     });
   });
 }
@@ -411,7 +447,7 @@ function printStatus(): void {
     log(`📊 Offline | reconnecting (${stats.consecutiveFailures})`);
     return;
   }
-  log(`📊 Online ${uptime()} | heartbeat ${stats.heartbeatsAcked}/${stats.heartbeatsSent} | tasks ${stats.tasksHandled} done ${stats.tasksFailed} failed | connections ${stats.totalConnections}`);
+  log(`📊 Online ${uptime()} | heartbeat ${stats.heartbeatsAcked}/${stats.heartbeatsSent} | tasks ${stats.tasksHandled} done ${stats.tasksFailed} failed ${stats.tasksRejected} rejected | active ${activeTasks}/${MAX_CONCURRENT_TASKS} | connections ${stats.totalConnections}`);
 }
 
 async function checkRemoteStatus(): Promise<void> {
