@@ -1,3 +1,5 @@
+[中文版](docs/README.zh.md) · [日本語版](docs/README.ja.md)
+
 # Opus Relay
 
 > Use your Claude subscription on any VPS — no API key needed.
