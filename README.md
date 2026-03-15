@@ -372,6 +372,10 @@ Whoever controls the VPS can send **any prompt** to Claude CLI on your machine. 
 - Error messages are sanitized — local file paths are **never** sent back to the server
 - Concurrent task limit prevents resource exhaustion
 
+## Pair With
+
+- **ClawAPI** ([`sstklen/clawapi`](https://github.com/sstklen/clawapi)) — AI API Key Manager + Smart Router. Opus Relay bridges the compute, ClawAPI manages the keys.
+
 ## License
 
 MIT

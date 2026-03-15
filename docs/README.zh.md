@@ -372,6 +372,10 @@ location /api/opus-relay {
 - 錯誤訊息已過濾 — 本地檔案路徑**絕不**回傳給伺服器
 - 同時任務數量限制防止資源耗盡
 
+## 搭配使用
+
+- **ClawAPI** ([`sstklen/clawapi`](https://github.com/sstklen/clawapi)) — AI API 金鑰管理 + 智能路由。Opus Relay 橋接算力，ClawAPI 管理金鑰。
+
 ## 授權條款
 
 MIT
